@@ -121,8 +121,67 @@ class PennTreeCharDataset(PennTreeBankDataset):
     def __len__(self) -> int:
         return self.data.shape[0] - self.win_len - self.target_len
 
+class PennTreeSentenceDataset(PennTreeBankDataset):
 
+    def __init__(self, win_len, target_len, root = "../data/penn-treebank",
+                 is_train: bool = False, is_valid: bool = False, is_test: bool = False,
+                 include_uppercase:bool = False,
+                 min_sentence_len: int = None, min_num_windows_per_sentence: int = 16) -> None:
+        super().__init__(win_len, target_len, root, is_train, is_valid, is_test, include_uppercase)
 
+        if min_sentence_len is not None and min_sentence_len < win_len + target_len:
+            raise ValueError(
+                f"min_len shall be at least win_len+target_len={win_len + target_len}, but got min_len={min_sentence_len}"
+            )
+
+        self.min_num_windows_per_sentence = min_num_windows_per_sentence
+        min_len = 128
+        self.min_sentence_len = min_sentence_len if min_sentence_len is not None else max(self.win_len + self.target_len + min_num_windows_per_sentence, min_len)
+
+        self._setup_data()
+
+    def _setup_data(self):
+        index_sentences = self._convert_raw()
+        self._filter_data_by_min_len(index_sentences)
+        self._get_lengths()
+
+    def _filter_data_by_min_len(self, index_sentences):
+        self.data = [sentence for sentence in index_sentences if len(sentence) >= self.min_sentence_len]
+
+    def _convert_raw(self):
+        raw_filename = f"{self.root}/ptb.{self.filename}.txt"
+        with open(raw_filename) as f:
+            raw_data = f.read()
+
+            """Filter"""
+            if not self.include_uppercase:
+                raw_data = raw_data.lower()
+
+            raw_data = re.sub(r'<unk>', " ", raw_data)
+            raw_data = re.sub(r"[ ]+", " ", raw_data)
+
+            sentences = raw_data.split("\n")
+        index_sentences = [self._convert_char2index(sentence) for sentence in sentences]
+
+        return index_sentences
+
+    def _get_lentghs(self):
+        self.sentence_idx_bins = np.cumsum(
+            [0] + [len(sentence) - self.win_len - self.target_len + 1 for sentence in self.data
+                   if len(sentence) >= self.min_sentence_len]
+        )
+
+    def __getitem__(self, idx: int):
+        item_idx = np.digitize(idx, self.sentence_idx_bins, right=False) - 1
+        win_idx = idx - self.sentence_idx_bins[item_idx]
+
+        return [
+            self.data[item_idx][win_idx: win_idx + self.win_len],
+            self.data[item_idx][win_idx + self.win_len: win_idx + self.win_len + self.target_len]
+        ]
+
+    def __len__(self) -> int:
+        return  self.sentence_idx_bins[-1] - 1
 
 
 print("yes")
