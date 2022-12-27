@@ -102,5 +102,105 @@ class WavenetLayer(nn.Module):
 
 class WavenetBlock(nn.Module):
 
-    def __init__(self):
+    def __init__(self, num_layers=2, ch_residual=32, ch_dilation=32, ch_skip=64,
+                 kernel_size=3, bias=True, causal=True) -> None:
         super().__init__()
+
+        """Params"""
+        self.causal = causal
+        self.bias = bias
+        self.kernel_size = kernel_size
+        self.ch_skip = ch_skip
+        self.ch_dilation = ch_dilation
+        self.ch_residual = ch_residual
+        self.num_layers = num_layers
+
+        self.layers = nn.ModuleList([
+            WavenetLayer(self.ch_residual, self.ch_dilation, self.ch_skip,
+                         self.kernel_size, dilation=(2 ** i),
+                         bias = self.bias, causal=self.causal) for i in range(self.num_layers)
+        ])
+
+    def forward(self, residual):
+        skip_outputs=[]
+        for layer in self.layers:
+            residual, skip = layer(residual)
+            skip_outputs.append(skip)
+
+        return residual, torch.stack(skip_outputs)
+
+class WaveNet(nn.Module):
+
+    def __init__(self, num_blocks=2, num_layers=2, num_classes=4, output_len=16,
+                 ch_start=16, ch_residual=32, ch_dilation=32, ch_skip=64, ch_end=32,
+                 kernel_size=3, bias=True, causal=True) -> None:
+        super(WaveNet, self).__init__()
+
+        """Params"""
+        self.num_blocks = num_blocks
+        self.num_layers = num_layers
+        self.num_classes = num_classes
+        self.output_len = output_len
+        self.ch_start = ch_start
+        self.ch_residual = ch_residual
+        self.ch_dilation = ch_dilation
+        self.ch_skip = ch_skip
+        self.ch_end = ch_end
+        self.kernel_size = kernel_size
+        self.bias = bias
+        self.causal = causal
+
+        """Layers"""
+        # 1x1 convolution to create channels
+        self.start_conv = nn.Conv1d(in_channels=self.ch_start,
+                                    out_channels = self.ch_residual,
+                                    kernel_size=1, bias=self.bias)
+        # wavenet blocks
+        self.blocks = nn.ModuleList([
+            WavenetBlock(self.num_layers, self.ch_residual, self.ch_dilation, self.ch_skip,
+                         self.kernel_size, self.bias, self.causal) for _ in range(self.num_blocks)
+        ])
+        # output convolutions
+        self.out_conv = nn.Sequential(
+            nn.ReLU(inplace=False),
+            nn.Conv1d(in_channels=self.ch_skip, out_channels=self.ch_end,
+                      kernel_size=1, bias=True),
+            nn.ReLU(inplace=False),
+            nn.Conv1d(in_channels=self.ch_end, out_channels=self.num_classes,
+                      kernel_size=1, bias=True)
+        )
+    def forward(self, x):
+        # create channels
+        residual = self.start_conv(x)
+        # pass data through the blocks
+        skip_outputs = []
+        for block in self.blocks:
+            residual, skip = block(residual)
+            skip_outputs.append(skip)
+
+        # sum skip connections
+        summed_skip = torch.cat(skip_outputs).sum(dim=0)
+
+        # carry out output transform
+        out = self.out_conv(summed_skip)
+
+        return out[..., -self.output_len] # if start from 0th index, even overfitting the network fails
+
+from penn_dataset import PenTreeCharDataset
+
+if __name__ == '__main__':
+    ds = PenTreeCharDataset(32, 8, is_test=True)
+    print("Done")
+
+    layer = WavenetLayer(dilation=1)
+    block = WavenetBlock()
+    model = WaveNet()
+    batch=8
+    ch=16
+    len=64
+    input = torch.randn((batch, ch, len))
+    # layer(input)
+    # block(input)
+
+    model(input)
+    print("OUT")
